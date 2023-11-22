@@ -8,6 +8,7 @@ import numpy as np
 import pickle
 
 class FileCompressionApp:
+    
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("File Compression Tool")
