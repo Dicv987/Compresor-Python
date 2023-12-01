@@ -6,6 +6,7 @@ import os
 from PIL import Image
 import numpy as np
 import pickle
+from ColaPrioridad import Heap, HeapNode
 
 class FileCompressionApp:
     
@@ -66,62 +67,71 @@ class FileCompressionApp:
         if not encoded_data or not huffman_tree:
             return ""
         
-        # Create a reversed dictionary that maps Huffman codes to symbols
+        # Crear un diccionario invertido que mapea códigos de Huffman a símbolos
         reversed_tree = {v: k for k, v in huffman_tree.items()}
         
-        # Initialize variables for decoding
+        # Inicializar variables para la decodificación
         decoded_data = ""
         current_code = ""
         
-        # Iterate through the encoded data, building the decoded output
+        # Iterar a través de los datos codificados, construyendo la salida decodificada
         for bit in encoded_data:
             current_code += bit
             if current_code in reversed_tree:
-                decoded_data += reversed_tree[current_code]
+                # Asegúrate de convertir el valor en una cadena antes de concatenar
+                decoded_data += str(reversed_tree[current_code])
                 current_code = ""
         
         return decoded_data
 
-    def rle_encode(self, image):
-        encoded = []
-        prev_pixel = None
-        count = 0
-        for row in image:
-            for pixel in row:
-                # Count consecutive identical pixels
-                if np.array_equal(pixel, prev_pixel):
-                    count += 1
-                else:
-                    # When a different pixel is encountered, store the previous pixel and its count
-                    if prev_pixel is not None:
-                        encoded.append((prev_pixel, count))
-                    prev_pixel = pixel
-                    count = 1
-        # Append the last pixel and its count
-        encoded.append((prev_pixel, count))
-        return encoded
+    #Encoding and decoding for images
+    def huffman_encoding_images(self, data):
+        if not data:
+            return None, None
 
-    def rle_decode(self, encoded_data, dimensions):
-        width, height = dimensions
-        # Ensure that there is encoded data before accessing it
-        if not encoded_data:
-            # Return a black image if there is no data
-            return np.zeros((height, width, 3), dtype=np.uint8)
+        # Cuenta la frecuencia de cada tupla de píxeles
+        frequency = Counter(data)
 
-        # Determine if it's an RGB or RGBA image based on the length of the first pixel
-        channels = len(encoded_data[0][0])
-        decoded_image = np.zeros((height, width, channels), dtype=np.uint8)
+        # Crea un heap con el peso y el símbolo (tupla de píxeles)
+        heap = [[weight, [symbol, ""]] for symbol, weight in frequency.items()]
+        heapq.heapify(heap)
 
-        x, y = 0, 0
-        for (value, count) in encoded_data:
-            for _ in range(count):
-                decoded_image[y][x] = value
-                x += 1
-                if x == width:
-                    x = 0
-                    y += 1
-        return decoded_image
+        # Construye el árbol de Huffman
+        while len(heap) > 1:
+            lo = heapq.heappop(heap)
+            hi = heapq.heappop(heap)
+            for pair in lo[1:]:
+                pair[1] = '0' + pair[1]
+            for pair in hi[1:]:
+                pair[1] = '1' + pair[1]
+            heapq.heappush(heap, [lo[0] + hi[0]] + lo[1:] + hi[1:])
 
+        # Diccionario de Huffman
+        huffman_dict = {item[0]: item[1] for item in heap[0][1:]}
+
+        # Codifica los datos
+        encoded_data = ''.join(huffman_dict[symbol] for symbol in data)
+
+        return huffman_dict, encoded_data
+
+    def huffman_decoding_images(self, encoded_data, huffman_tree):
+        if not encoded_data or not huffman_tree:
+            return []
+
+        # Diccionario invertido: códigos a tuplas
+        reversed_tree = {v: k for k, v in huffman_tree.items()}
+
+        # Decodificación
+        decoded_data = []
+        current_code = ""
+        for bit in encoded_data:
+            current_code += bit
+            if current_code in reversed_tree:
+                decoded_data.append(reversed_tree[current_code])
+                current_code = ""
+
+        return decoded_data
+    
     #Ui methods
     def upload_file(self):
         # Open a file dialog to select a file and update the file entry field with the selected file path
@@ -160,15 +170,7 @@ class FileCompressionApp:
             elif file_type == 'Text':
                 self.compress_text(file_path)
 
-    #Unfinished methods
-    def compress_audio(self,file_path):
-        print(f"Compressing audio file: {file_path}")
-        # Aquí va la lógica para comprimir archivos de audio
-
-    def decompress_audio(self,file_path):
-        print(f"Decompressing audio file: {file_path}")
-        # Aquí va la lógica para descomprimir archivos de audio
-        
+    #Unfinished methods        
     def compress_video(self,file_path):
         print(f"Compressing video file: {file_path}")
         # Aquí va la lógica para comprimir archivos de video
@@ -275,28 +277,51 @@ class FileCompressionApp:
 
         # Store the dimensions of the image (width, height, and channels)
         self.width, self.height, self.channels = image_matrix.shape
-
-        # Encode the image using Run-Length Encoding (RLE)
-        encoded_image = self.rle_encode(image_matrix.tolist())
-
+        
+        # Convertir la imagen en una lista lineal de valores (flattening)
+        pixel_list = [tuple(pixel) for row in image_matrix for pixel in row]
+                
+        # Codificar la imagen usando Huffman
+        huffman_dict, encoded_image = self.huffman_encoding_images(pixel_list)
+                
+        # Convert the string of '0's and '1's to bytes
+        padded_encoded_data = self.pad_encoded_data(encoded_image)
+        b = bytearray()
+        for i in range(0, len(padded_encoded_data), 8):
+            byte = padded_encoded_data[i:i+8]
+            b.append(int(byte, 2))
+            
         # Ask the user to select the location and name of the compressed image file
-        save_path = filedialog.asksaveasfilename(defaultextension=".rle",
-                                                filetypes=[("RLE files", "*.rle")])
+        save_path = filedialog.asksaveasfilename(defaultextension=".bin",
+                                                filetypes=[("BIN files", "*.bin")])
 
         if save_path:
             # Save the dimensions and the encoded image to the selected file
             with open(save_path, 'wb') as f:
-                pickle.dump((self.width, self.height, encoded_image), f)
+                pickle.dump((self.width, self.height,self.channels, huffman_dict, bytes(b)), f)
                 messagebox.showinfo("Success", f"Imagen comprimida guardada en: {save_path}")
 
     def decompress_image(self, file_path):
         # Open the compressed image file
         with open(file_path, 'rb') as f:
-            # Load the dimensions and the encoded image data
-            width, height, encoded_image = pickle.load(f)
+            width, height,channels,huffman_dict, encoded_image = pickle.load(f)
+            
+        # Convert bytes to the string of '0's and '1's
+        encoded_data = ''.join(f"{byte:08b}" for byte in encoded_image)
 
-        # Use the actual dimensions stored in the file for decoding
-        image_matrix = self.rle_decode(encoded_image, (height, width))
+        # Remove padding
+        padded_info = encoded_data[:8]
+        extra_padding = int(padded_info, 2)
+        encoded_data = encoded_data[8:-extra_padding]
+        
+        
+        # Decodificar la imagen usando Huffman
+        decoded_pixel_list = self.huffman_decoding_images(encoded_data, huffman_dict)
+        
+        
+        decoded_image = [decoded_pixel_list[i:i+width] for i in range(0, len(decoded_pixel_list),width)]
+        # Reconvertir la lista en la matriz de la imagen
+        image_matrix = np.array(decoded_image).reshape(width,height,channels)
 
         # Ask the user to select the location and name of the decompressed image file
         save_path = filedialog.asksaveasfilename(defaultextension=".bmp",
@@ -322,6 +347,16 @@ class FileCompressionApp:
         img = Image.fromarray(np.array(matrix, dtype=np.uint8))
         img.save(save_path)
 
+    #Audio methods
+    def compress_audio(self,file_path):
+        print(f"Compressing audio file: {file_path}")
+        # Aquí va la lógica para comprimir archivos de audio
+
+    def decompress_audio(self,file_path):
+        print(f"Decompressing audio file: {file_path}")
+        # Aquí va la lógica para descomprimir archivos de audio
+        
+        
 if __name__ == "__main__":
     app = FileCompressionApp()
     app.run()
