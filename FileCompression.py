@@ -6,7 +6,8 @@ import os
 from PIL import Image
 import numpy as np
 import pickle
-from ColaPrioridad import Heap, HeapNode
+import wave
+import numpy as np
 
 class FileCompressionApp:
     
@@ -132,6 +133,67 @@ class FileCompressionApp:
 
         return decoded_data
     
+    #Encoding and decoding for audio 
+    def huffman_encoding_audio(self, audio_array):
+        if audio_array.size == 0:
+            return None, None
+
+        # Convertir el array de NumPy a una lista de símbolos (muestras de audio)
+        # audio_bytes = audio_array.astype(np.int8).tobytes()
+        
+        audio_bytes = audio_array.tobytes()
+
+        # Calcular la frecuencia de cada símbolo en los datos de audio
+        frequency = Counter(audio_bytes)
+
+        # Crear una lista de listas, donde cada inner list contiene un símbolo y su código Huffman
+        heap = [[weight, [symbol, ""]] for symbol, weight in frequency.items()]
+
+        # Crear un heap binario (min-heap) a partir de la lista
+        heapq.heapify(heap)
+
+        # Construir el árbol de Huffman fusionando repetidamente los dos nodos de menor peso
+        while len(heap) > 1:
+            lo = heapq.heappop(heap)
+            hi = heapq.heappop(heap)
+            for pair in lo[1:]:
+                pair[1] = '0' + pair[1]
+            for pair in hi[1:]:
+                pair[1] = '1' + pair[1]
+            heapq.heappush(heap, [lo[0] + hi[0]] + lo[1:] + hi[1:])
+
+        # Crear un diccionario que mapea símbolos a sus códigos Huffman
+        huffman_dict = {item[0]: item[1] for item in heap[0][1:]}
+
+        # Codificar los datos de audio utilizando los códigos Huffman
+        encoded_data = ''.join(huffman_dict[symbol] for symbol in audio_bytes)
+
+        return huffman_dict, encoded_data
+
+    def huffman_decoding_audio(self, encoded_data, huffman_dict):
+            if not encoded_data or not huffman_dict:
+                return np.array([])  # Devolver un array vacío en caso de datos vacíos o diccionario vacío
+
+            # Invertir el diccionario de Huffman para mapear códigos a símbolos
+            reversed_dict = {v: k for k, v in huffman_dict.items()}
+
+            # Inicializar variables para la decodificación
+            decoded_data = []
+            current_code = ""
+
+            # Iterar a través de los datos codificados, construyendo la salida decodificada
+            for bit in encoded_data:
+                current_code += bit
+                if current_code in reversed_dict:
+                    decoded_data.append(reversed_dict[current_code])
+                    current_code = ""
+
+            # Convertir la lista de símbolos decodificados de nuevo a un array de NumPy
+            decoded_array = np.frombuffer(bytearray(decoded_data), dtype=np.int16)
+
+            return decoded_array
+
+
     #Ui methods
     def upload_file(self):
         # Open a file dialog to select a file and update the file entry field with the selected file path
@@ -348,15 +410,97 @@ class FileCompressionApp:
         img.save(save_path)
 
     #Audio methods
-    def compress_audio(self,file_path):
-        print(f"Compressing audio file: {file_path}")
-        # Aquí va la lógica para comprimir archivos de audio
+    
+    def wav_to_matrix(self, archivo_wav):
+        with wave.open(archivo_wav, 'r') as wav_file:
+            # Leer parámetros del archivo WAV
+            n_channels = wav_file.getnchannels()
+            sample_width = wav_file.getsampwidth()
+            n_frames = wav_file.getnframes()
+            frame_rate = wav_file.getframerate()
 
-    def decompress_audio(self,file_path):
-        print(f"Decompressing audio file: {file_path}")
-        # Aquí va la lógica para descomprimir archivos de audio
+            # Leer datos de audio
+            audio_data = wav_file.readframes(n_frames)
+
+            # Determinar el tipo de datos adecuado para el array de NumPy
+            if sample_width == 1:  # 8-bit WAV
+                dtype = np.uint8
+            elif sample_width == 2:  # 16-bit WAV
+                dtype = np.int16
+            else:
+                raise ValueError("Profundidad de bits no soportada")
+
+            # Convertir a array de NumPy
+            audio_array = np.frombuffer(audio_data, dtype=dtype)
+
+            # Reshape el array si es estéreo
+            if n_channels == 2:
+                audio_array = audio_array.reshape(-1, 2)
+
+            return audio_array, (n_channels, frame_rate, sample_width)
+
+    def matrix_to_wav(self, audio_array, archivo_wav, wav_params):
+        n_channels, frame_rate, sample_width = wav_params
+
+        # Convertir array de NumPy a bytes
+        audio_bytes = audio_array.tobytes()
+
+        # Abrir archivo WAV y escribir muestras con los parámetros originales
+        with wave.open(archivo_wav, 'wb') as wav_file:
+            wav_file.setparams((n_channels, sample_width, frame_rate, 0, 'NONE', 'NONE'))
+            wav_file.writeframes(audio_bytes)
+
+    def compress_audio(self, file_path):
+        # Obtener los datos de audio como un array de NumPy y los parámetros del WAV
+        audio_array, wav_params = self.wav_to_matrix(file_path)
+
+        # Aplicar la codificación Huffman al array de NumPy
+        huffman_tree, encoded_data = self.huffman_encoding_audio(audio_array)
         
+        # Convertir la cadena de '0's y '1's en bytes utilizando la función de relleno
+        padded_encoded_data = self.pad_encoded_data(encoded_data)
+        b = bytearray()
+        for i in range(0, len(padded_encoded_data), 8):
+            byte = padded_encoded_data[i:i+8]
+            b.append(int(byte, 2))
+
+        # Guardar los datos comprimidos, el árbol de Huffman y los parámetros del WAV en un archivo binario
+        save_path = filedialog.asksaveasfilename(defaultextension=".bin",
+                                                filetypes=[("Binary files", "*.bin")])
+        if not save_path:
+            messagebox.showwarning("Cancelled", "Se canceló el proceso")
+            return
+
+        with open(save_path, 'wb') as f:
+            pickle.dump((huffman_tree, bytes(b), wav_params), f)
+        messagebox.showinfo("Success", f"Archivo comprimido guardado en: {save_path}")
+
+    def decompress_audio(self, file_path):
+        # Leer el archivo binario para obtener el árbol de Huffman, los datos comprimidos y los parámetros del WAV
+        try:
+            with open(file_path, 'rb') as f:
+                huffman_tree, encoded_bytes, wav_params = pickle.load(f)
+        except IOError as e:
+            messagebox.showerror("Error", f"Error al abrir o leer el archivo {e}")
+            return
+
+        # Convertir bytes nuevamente en la cadena de '0's y '1's
+        encoded_data = ''.join(f"{byte:08b}" for byte in encoded_bytes)
+
+        # Decodificar los datos comprimidos utilizando la función específica para audio
+        decoded_array = self.huffman_decoding_audio(encoded_data, huffman_tree)
         
+        # Guardar el array como archivo WAV
+        save_path = filedialog.asksaveasfilename(defaultextension=".wav",
+                                                filetypes=[("WAV files", "*.wav")])
+        if not save_path:
+            messagebox.showwarning("Cancelled", "Se canceló el proceso")
+            return
+
+        self.matrix_to_wav(decoded_array, save_path, wav_params)
+        messagebox.showinfo("Success", f"Archivo descomprimido guardado en: {save_path}")
+
+
 if __name__ == "__main__":
     app = FileCompressionApp()
     app.run()
