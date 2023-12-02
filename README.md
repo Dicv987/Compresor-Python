@@ -9,6 +9,7 @@ El compresor soporta los siguientes formatos:
 - **Imágenes**: Archivos en formato `.bmp`
 - **Audio**: Archivos en formato `.wav`
 - **Profundidad de bits aceptada**: `8bit & 16bit`
+- **Video**: Archivos en formato `.avi`
 
 ## Cómo Usar
 Para usar el compresor, simplemente ejecuta el programa y carga un archivo en alguno de los formatos soportados. Si el archivo subido es la versión comprimida, se descomprimirá automáticamente y viceversa.
