@@ -7,9 +7,6 @@ from PIL import Image
 import numpy as np
 import pickle
 import wave
-import cv2
-from moviepy.editor import VideoFileClip
-import subprocess
 
 class FileCompressionApp:
     
@@ -86,36 +83,6 @@ class FileCompressionApp:
                 current_code = ""
         
         return decoded_data
-
-    #Encoding and decoding for images
-    def huffman_encoding_images(self, data):
-        if not data:
-            return None, None
-
-        # Cuenta la frecuencia de cada tupla de píxeles
-        frequency = Counter(data)
-
-        # Crea un heap con el peso y el símbolo (tupla de píxeles)
-        heap = [[weight, [symbol, ""]] for symbol, weight in frequency.items()]
-        heapq.heapify(heap)
-
-        # Construye el árbol de Huffman
-        while len(heap) > 1:
-            lo = heapq.heappop(heap)
-            hi = heapq.heappop(heap)
-            for pair in lo[1:]:
-                pair[1] = '0' + pair[1]
-            for pair in hi[1:]:
-                pair[1] = '1' + pair[1]
-            heapq.heappush(heap, [lo[0] + hi[0]] + lo[1:] + hi[1:])
-
-        # Diccionario de Huffman
-        huffman_dict = {item[0]: item[1] for item in heap[0][1:]}
-
-        # Codifica los datos
-        encoded_data = ''.join(huffman_dict[symbol] for symbol in data)
-
-        return huffman_dict, encoded_data
 
     def huffman_decoding_images(self, encoded_data, huffman_tree):
         if not encoded_data or not huffman_tree:
@@ -194,6 +161,51 @@ class FileCompressionApp:
             decoded_array = np.frombuffer(bytearray(decoded_data), dtype=np.int16)
 
             return decoded_array
+
+    #Encoding and decoding for video
+
+    def huffman_encoding_video(self, data):
+        if not data:
+            return None, None
+
+        # Trata los datos como una secuencia de bytes
+        if isinstance(data, str):
+            data = data.encode()
+
+        frequency = Counter(data)
+        heap = [[weight, [symbol, ""]] for symbol, weight in frequency.items()]
+        heapq.heapify(heap)
+
+        while len(heap) > 1:
+            lo = heapq.heappop(heap)
+            hi = heapq.heappop(heap)
+            for pair in lo[1:]:
+                pair[1] = '0' + pair[1]
+            for pair in hi[1:]:
+                pair[1] = '1' + pair[1]
+            heapq.heappush(heap, [lo[0] + hi[0]] + lo[1:] + hi[1:])
+
+        huffman_dict = {item[0]: item[1] for item in heap[0][1:]}
+        encoded_data = ''.join(huffman_dict[byte] for byte in data)
+
+        return huffman_dict, encoded_data
+
+    def huffman_decoding_video(self, encoded_data, huffman_tree):
+        if not encoded_data or not huffman_tree:
+            return b""
+
+        reversed_tree = {v: k for k, v in huffman_tree.items()}
+
+        decoded_data = []
+        current_code = ""
+        for bit in encoded_data:
+            current_code += bit
+            if current_code in reversed_tree:
+                decoded_data.append(reversed_tree[current_code])
+                current_code = ""
+
+        # Convertir la lista de bytes decodificados de nuevo a un objeto de bytes
+        return bytearray(decoded_data)
 
 
     #Ui methods
@@ -335,7 +347,7 @@ class FileCompressionApp:
         pixel_list = [tuple(pixel) for row in image_matrix for pixel in row]
                 
         # Codificar la imagen usando Huffman
-        huffman_dict, encoded_image = self.huffman_encoding_images(pixel_list)
+        huffman_dict, encoded_image = self.huffman_encoding(pixel_list)
                 
         # Convert the string of '0's and '1's to bytes
         padded_encoded_data = self.pad_encoded_data(encoded_image)
@@ -490,65 +502,56 @@ class FileCompressionApp:
         self.matrix_to_wav(decoded_array, save_path, wav_params)
         messagebox.showinfo("Success", f"Archivo descomprimido guardado en: {save_path}")
 
+    #Video methods
     def compress_video(self, file_path):
-        data = self.read_video(file_path)
-        huffman_tree, encoded_data = self.huffman_encoding(data)
-        padded_encoded_data = self.pad_encoded_data(encoded_data)
-        b = bytearray()
+        video_data = self.read_video(file_path)
+        huffman_tree, encoded_video = self.huffman_encoding_video(video_data)
+
+        padded_encoded_data = self.pad_encoded_data(encoded_video)
+        byte_array = bytearray()
         for i in range(0, len(padded_encoded_data), 8):
             byte = padded_encoded_data[i:i+8]
-            b.append(int(byte, 2))
-        
+            byte_array.append(int(byte, 2))
+
         save_path = filedialog.asksaveasfilename(defaultextension=".bin",
-                                                filetypes=[("Binary files", "*.bin")])
+                                                 filetypes=[("Binary files", "*.bin")])
         if not save_path:
-            messagebox.showwarning("Cancelled", "Se canceló el proceso")
+            messagebox.showwarning("Cancelled", "Se canceló el proceso de guardado")
             return
-        
+
         with open(save_path, 'wb') as f:
-            pickle.dump((huffman_tree, bytes(b)), f)
-        messagebox.showinfo("Success", f"Archivo comprimido guardado en: {save_path}")
-            
-        
-    def read_video(self, file_path):
-        with open(file_path, 'rb') as f:
-            video_data = f.read()
-        return video_data
-    
+            pickle.dump((huffman_tree, bytes(byte_array)), f)
+
+        messagebox.showinfo("Success", f"Video comprimido guardado en: {save_path}")
+
     def decompress_video(self, file_path):
-        try:
-            with open(file_path, 'rb') as f:
-                huffman_tree, encoded_bytes = pickle.load(f)
-        except IOError as e:
-            messagebox.showerror("Error", f"Error al abrir o leer el archivo {e}")
-            return
-        
+        with open(file_path, 'rb') as f:
+            huffman_tree, encoded_bytes = pickle.load(f)
+
         encoded_data = ''.join(f"{byte:08b}" for byte in encoded_bytes)
         padded_info = encoded_data[:8]
         extra_padding = int(padded_info, 2)
         encoded_data = encoded_data[8:-extra_padding]
-        
-        decoded_data = self.huffman_decoding(encoded_data, huffman_tree)
-        
-        save_path = filedialog.asksaveasfilename(defaultextension=".mp4",
-                                                filetypes=[("MP4 files", "*.mp4")])
+
+        decoded_video = self.huffman_decoding_video(encoded_data, huffman_tree)
+
+        save_path = filedialog.asksaveasfilename(defaultextension=".avi",
+                                                 filetypes=[("AVI files", "*.avi")])
         if not save_path:
-            messagebox.showwarning("Cancelled", "Se canceló el proceso")
+            messagebox.showwarning("Cancelled", "Se canceló el proceso de guardado")
             return
-        
-        self.write_video(decoded_data, save_path, 30,(1920,1080))
-        messagebox.showinfo("Success", f"Archivo descomprimido guardado en: {save_path}")
 
-    def write_video(self, decoded_data, save_path, frame_rate, frame_size):
-        # Define video codec and create VideoWriter object
-        fourcc = cv2.VideoWriter_fourcc(*'MP4V') # Codec definition, 'MP4V' for .mp4 files
-        out = cv2.VideoWriter(save_path, fourcc, frame_rate, frame_size)
+        self.write_video(save_path, decoded_video)
+        messagebox.showinfo("Success", f"Video descomprimido guardado en: {save_path}")
 
-        for frame in decoded_data:
-            # Assuming each frame in decoded_data is a proper image format for OpenCV
-            out.write(frame)
+    def read_video(self, file_path):
+        with open(file_path, 'rb') as f:
+            video_data = f.read()      
+        return video_data
 
-        out.release()
+    def write_video(self, file_path, video_data):
+        with open(file_path, 'wb') as f:
+            f.write(video_data)
         
 if __name__ == "__main__":
     app = FileCompressionApp()
