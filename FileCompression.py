@@ -7,7 +7,9 @@ from PIL import Image
 import numpy as np
 import pickle
 import wave
-import numpy as np
+import cv2
+from moviepy.editor import VideoFileClip
+import subprocess
 
 class FileCompressionApp:
     
@@ -232,17 +234,6 @@ class FileCompressionApp:
             elif file_type == 'Text':
                 self.compress_text(file_path)
 
-    #Unfinished methods        
-    def compress_video(self,file_path):
-        print(f"Compressing video file: {file_path}")
-        # Aquí va la lógica para comprimir archivos de video
-
-    def decompress_video(self,file_path):
-        print(f"Decompressing video file: {file_path}")
-        # Aquí va la lógica para descomprimir archivos de video
-        
-    #Finished methods
-
     #Text methods
     def compress_text(self, file_path):
         try:
@@ -410,7 +401,6 @@ class FileCompressionApp:
         img.save(save_path)
 
     #Audio methods
-    
     def wav_to_matrix(self, archivo_wav):
         with wave.open(archivo_wav, 'r') as wav_file:
             # Leer parámetros del archivo WAV
@@ -500,7 +490,66 @@ class FileCompressionApp:
         self.matrix_to_wav(decoded_array, save_path, wav_params)
         messagebox.showinfo("Success", f"Archivo descomprimido guardado en: {save_path}")
 
+    def compress_video(self, file_path):
+        data = self.read_video(file_path)
+        huffman_tree, encoded_data = self.huffman_encoding(data)
+        padded_encoded_data = self.pad_encoded_data(encoded_data)
+        b = bytearray()
+        for i in range(0, len(padded_encoded_data), 8):
+            byte = padded_encoded_data[i:i+8]
+            b.append(int(byte, 2))
+        
+        save_path = filedialog.asksaveasfilename(defaultextension=".bin",
+                                                filetypes=[("Binary files", "*.bin")])
+        if not save_path:
+            messagebox.showwarning("Cancelled", "Se canceló el proceso")
+            return
+        
+        with open(save_path, 'wb') as f:
+            pickle.dump((huffman_tree, bytes(b)), f)
+        messagebox.showinfo("Success", f"Archivo comprimido guardado en: {save_path}")
+            
+        
+    def read_video(self, file_path):
+        with open(file_path, 'rb') as f:
+            video_data = f.read()
+        return video_data
+    
+    def decompress_video(self, file_path):
+        try:
+            with open(file_path, 'rb') as f:
+                huffman_tree, encoded_bytes = pickle.load(f)
+        except IOError as e:
+            messagebox.showerror("Error", f"Error al abrir o leer el archivo {e}")
+            return
+        
+        encoded_data = ''.join(f"{byte:08b}" for byte in encoded_bytes)
+        padded_info = encoded_data[:8]
+        extra_padding = int(padded_info, 2)
+        encoded_data = encoded_data[8:-extra_padding]
+        
+        decoded_data = self.huffman_decoding(encoded_data, huffman_tree)
+        
+        save_path = filedialog.asksaveasfilename(defaultextension=".mp4",
+                                                filetypes=[("MP4 files", "*.mp4")])
+        if not save_path:
+            messagebox.showwarning("Cancelled", "Se canceló el proceso")
+            return
+        
+        self.write_video(decoded_data, save_path, 30,(1920,1080))
+        messagebox.showinfo("Success", f"Archivo descomprimido guardado en: {save_path}")
 
+    def write_video(self, decoded_data, save_path, frame_rate, frame_size):
+        # Define video codec and create VideoWriter object
+        fourcc = cv2.VideoWriter_fourcc(*'MP4V') # Codec definition, 'MP4V' for .mp4 files
+        out = cv2.VideoWriter(save_path, fourcc, frame_rate, frame_size)
+
+        for frame in decoded_data:
+            # Assuming each frame in decoded_data is a proper image format for OpenCV
+            out.write(frame)
+
+        out.release()
+        
 if __name__ == "__main__":
     app = FileCompressionApp()
     app.run()
